@@ -1,0 +1,2 @@
+# majsoul_wrapper
+这个项目的目标是使用majsoul_wrapper即使抓取《雀魂》对局信息，并桥接至一个开源的天凤麻将AI，实现在雀魂中用AI打麻将。

@@ -1,0 +1,6 @@
+[submodule "JianYangAI"]
+	path = JianYangAI
+	url = git@github.com:747929791/MahjongAI.git
+[submodule "majsoul_wrapper"]
+	path = majsoul_wrapper
+	url = git@github.com:747929791/majsoul_wrapper.git
