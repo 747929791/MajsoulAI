@@ -3,16 +3,18 @@ import time
 import select
 import socket
 import pickle
-from typing import Dict,List,Tuple
+from typing import Dict, List, Tuple
 from urllib.parse import quote, unquote
 from enum import Enum
 from xmlrpc.client import ServerProxy
 
 import majsoul_wrapper as sdk
 
-class State(Enum): # 控制AI进程与Majsoul进程同步
-    WaitingForStart=0
-    Playing=1
+
+class State(Enum):  # 控制AI进程与Majsoul进程同步
+    WaitingForStart = 0
+    Playing = 1
+
 
 class CardRecorder:
     # 由于雀魂不区分相同牌的编号，但天凤区分tile136，需要根据出现的顺序转换
@@ -20,46 +22,45 @@ class CardRecorder:
         self.clear()
 
     def clear(self):
-        self.cardDict={tile:0 for tile in sdk.all_tiles}
-    
-    def majsoul2tenhou(self,tile:str)->Tuple[int,int]:
-        # tileStr to (tile136,tile34) (e.g. '0s' -> (88,37)
-        t='mpsz'.index(tile[-1])
-        if tile[0]=='0':
-            #红宝牌
-            return [(16,35), (52,36), (88,37)][t]
-        else:
-            tile136=(ord(tile[0])-ord('0')-1)*4+9*4*t
-            if tile[0]=='5' and t<3: #5 m|p|s
-                tile136+=1
-            tile136+=self.cardDict[tile]
-            self.cardDict[tile]+=1
-            tile34=tile136//4
-            return (tile136,tile34)
+        self.cardDict = {tile: 0 for tile in sdk.all_tiles}
 
-    def tenhou2majsoul(self,tile136=None,tile34=None):
-        # (tile136,tile34) to tileStr
-        if tile136!=None:
-            assert(tile34==None)
-            if tile34 in (16,52,88):
-                #红宝牌
-                return '0'+'mps'[(16,52,88).index(tile34)]
-            else:
-                return str((tile136//4)%9+1)+'mpsz'[tile136//36]
+    def majsoul2tenhou(self, tile: str) -> Tuple[int, int]:
+        # tileStr to (tile136,tile34) (e.g. '0s' -> (88,37)
+        t = 'mpsz'.index(tile[-1])
+        if tile[0] == '0':
+            #红宝牌
+            return [(16, 35), (52, 36), (88, 37)][t]
         else:
-            assert(tile136==None)
-            if tile34>34:
+            tile136 = (ord(tile[0])-ord('0')-1)*4+9*4*t
+            if tile[0] == '5' and t < 3:  # 5 m|p|s
+                tile136 += 1
+            tile136 += self.cardDict[tile]
+            self.cardDict[tile] += 1
+            tile34 = tile136//4
+            return (tile136, tile34)
+
+    def tenhou2majsoul(self, tile136=None, tile34=None):
+        # (tile136,tile34) to tileStr
+        if tile136 != None:
+            assert(tile34 == None)
+            if tile34 in (16, 52, 88):
+                #红宝牌
+                return '0'+'mps'[(16, 52, 88).index(tile34)]
+            else:
+                return str((tile136//4) % 9+1)+'mpsz'[tile136//36]
+        else:
+            assert(tile136 == None)
+            if tile34 > 34:
                 #红宝牌
                 return '0'+'mps'[tile34-35]
             else:
-                return str(tile34%9+1)+'mpsz'[tile34//9]
-
+                return str(tile34 % 9+1)+'mpsz'[tile34//9]
 
 
 class AIWrapper(sdk.MajsoulHandler):
     # TenHouAI <-> AI_Wrapper <-> Majsoul Interface
 
-    def __init__(self, socket_:socket.socket):
+    def __init__(self, socket_: socket.socket):
         # 与AI的通信
         self.AI_socket = socket_
         self.AI_buffer = bytes(0)
@@ -67,10 +68,12 @@ class AIWrapper(sdk.MajsoulHandler):
         # 与Majsoul的通信
         self.majsoul_server = ServerProxy("http://localhost:8888")  # 初始化服务器
         self.liqiProto = sdk.LiqiProto()
-        self.majsoul_history_msg = []   #websocket flow_msg
-        self.majsoul_msg_p = 0          #当前准备解析的消息下标
+        self.majsoul_history_msg = []  # websocket flow_msg
+        self.majsoul_msg_p = 0  # 当前准备解析的消息下标
         # 牌号转换
-        self.cardRecorder=CardRecorder()
+        self.cardRecorder = CardRecorder()
+        # AI上一次input操作的msg_dict(维护tile136一致性)
+        self.lastOp = self.tenhouEncode({'opcode': None})
 
     def recv_from_majsoul(self):
         # 从majsoul websocket中获取数据，并尝试解析执行。
@@ -80,17 +83,17 @@ class AIWrapper(sdk.MajsoulHandler):
         if l < n:
             flow = pickle.loads(self.majsoul_server.get_items(l, n).data)
             self.majsoul_history_msg = self.majsoul_history_msg+flow
-            pickle.dump(self.majsoul_history_msg, open('websocket_frames.pkl', 'wb'))
-        while(self.majsoul_msg_p<n):
-            flow_msg=self.majsoul_history_msg[self.majsoul_msg_p]
+            pickle.dump(self.majsoul_history_msg, open(
+                'websocket_frames.pkl', 'wb'))
+        while(self.majsoul_msg_p < n):
+            flow_msg = self.majsoul_history_msg[self.majsoul_msg_p]
             result = self.liqiProto.parse(flow_msg)
             failed = self.parse(result)
             if failed:
                 break
             self.majsoul_msg_p += 1
-        time.sleep(0.2)
 
-    def recv(self, data:bytes):
+    def recv(self, data: bytes):
         #接受来自AI的tenhou proto数据
         self.AI_buffer += data
         s = self.AI_buffer.split(b'\x00')
@@ -98,7 +101,7 @@ class AIWrapper(sdk.MajsoulHandler):
             self._eventHandler(msg.decode('utf-8'))
         self.AI_buffer = s[-1]
 
-    def send(self, data:bytes):
+    def send(self, data: bytes):
         #向AI发送tenhou proto数据
         print('send:', data)
         self.AI_socket.send(data)
@@ -106,14 +109,19 @@ class AIWrapper(sdk.MajsoulHandler):
     def _eventHandler(self, msg):
         print('recv:', msg)
         d = self.tenhouDecode(msg)
-        funcName = 'on_' + d['opcode']
-        if hasattr(self, funcName):
-            getattr(self, funcName)(d)
-        else:
-            print('[AI EVENT] :', msg)
+        if self.AI_state == State.WaitingForStart:
+            funcName = 'on_' + d['opcode']
+            if hasattr(self, funcName):
+                getattr(self, funcName)(d)
+            else:
+                print('[AI EVENT] :', msg)
+        elif self.AI_state == State.Playing:
+            op = d['opcode']
+            if op == 'D':
+                #出牌
+                self.on_DiscardTile(d)
 
-    
-    def tenhouDecode(self, msg:str)->Dict:  # get tenhou protocol msg
+    def tenhouDecode(self, msg: str) -> Dict:  # get tenhou protocol msg
         l = []
         msg = str.strip(msg)[1:-2] + ' '
         bv = 0
@@ -129,7 +137,7 @@ class AIWrapper(sdk.MajsoulHandler):
         d['opcode'] = msg[0]
         return d
 
-    def tenhouEncode(self, kwargs:Dict)->str:  # encode tenhou protocol msg
+    def tenhouEncode(self, kwargs: Dict) -> str:  # encode tenhou protocol msg
         opcode = kwargs['opcode']
         s = '<' + str(opcode)
         for k, v in kwargs.items():
@@ -137,7 +145,7 @@ class AIWrapper(sdk.MajsoulHandler):
                 s += ' ' + str(k) + '="' + str(v) + '"'
         s += '/>\x00'
         return s
-    
+
     #-------------------------AI回调函数-------------------------
 
     def on_HELO(self, msg_dict):
@@ -152,13 +160,15 @@ class AIWrapper(sdk.MajsoulHandler):
         #step 3: init JianYangAI 四人东模式
         self.send(b'<GO type="1" lobby="0" gpid="EE26C0F2-327686F1"/>\x00')
         #step 4: 用户信息
-        self.send(('<UN n0="'+quote('tst-tio')+'" n1="'+quote('user1')+'" n2="'+quote('user2')+'" n3="'+quote('user3')+'" dan="9,9,9,0" rate="985.47,1648.57,1379.50,1500.00" sx="M,M,M,M"/>\x00').encode())
+        self.send(('<UN n0="'+quote('tst-tio')+'" n1="'+quote('user1')+'" n2="'+quote('user2')+'" n3="' +
+                   quote('user3')+'" dan="9,9,9,0" rate="985.47,1648.57,1379.50,1500.00" sx="M,M,M,M"/>\x00').encode())
         #step 5: fake录像地址
-        self.send(('<TAIKYOKU oya="0" log="xxxxxxxxxxxx-xxxx-xxxx-xxxxxxxx"/>\x00').encode())
+        self.send(
+            ('<TAIKYOKU oya="0" log="xxxxxxxxxxxx-xxxx-xxxx-xxxxxxxx"/>\x00').encode())
 
     def on_NEXTREADY(self, msg_dict):
         # newRound
-        self.AI_state=State.Playing
+        self.AI_state = State.Playing
     #-------------------------Majsoul回调函数-------------------------
 
     def newRound(self, ju: int, ben: int, tiles: List[str], scores: List[int], leftTileCount: int, doras: List[str]):
@@ -171,43 +181,49 @@ class AIWrapper(sdk.MajsoulHandler):
         leftTileCount:剩余牌数
         doras:宝牌列表
         """
-        if self.AI_state!=State.Playing:
-            return True # AI未准备就绪，停止解析
-        dora136,_=self.cardRecorder.majsoul2tenhou(doras[0])
-        seed=[ju,ben,0,-1,-1,dora136]     # 当前轮数/连庄立直信息
-        ten= [s//100 for s in scores]     # 当前分数(1ten=100分)
-        oya= (self.mySeat-ju)%4      # 0~3 当前轮我是第几个玩家
-        hai= []     # 当前手牌tile136
-        for tile in tiles:
-            tile136,_=self.cardRecorder.majsoul2tenhou(tile)
+        if self.AI_state != State.Playing:
+            return True  # AI未准备就绪，停止解析
+        dora136, _ = self.cardRecorder.majsoul2tenhou(doras[0])
+        seed = [ju, ben, 0, -1, -1, dora136]     # 当前轮数/连庄立直信息
+        ten = [s//100 for s in scores]     # 当前分数(1ten=100分)
+        oya = (4-self.mySeat+ju) % 4      # 0~3 当前轮谁是庄家(我是0)
+        hai = []     # 当前手牌tile136
+        for tile in tiles[:13]:
+            tile136, _ = self.cardRecorder.majsoul2tenhou(tile)
             hai.append(tile136)
-        assert(len(seed)==6)
-        assert(len(ten)==4)
-        assert(0<=oya<4)
-        assert(len(hai) in (13,14))
-        self.send(('<INIT seed="'+','.join(str(i) for i in seed)+'" ten="'+','.join(str(i) for i in ten)+'" oya="'+str(oya)+'" hai="'+','.join(str(i) for i in hai)+'"/>\x00').encode())
+        assert(len(seed) == 6)
+        assert(len(ten) == 4)
+        assert(0 <= oya < 4)
+        assert(len(hai) in (13, 14))
+        self.send(('<INIT seed="'+','.join(str(i) for i in seed)+'" ten="'+','.join(str(i)
+                                                                                    for i in ten)+'" oya="'+str(oya)+'" hai="'+','.join(str(i) for i in hai)+'"/>\x00').encode())
+        if len(tiles) == 14:
+            self.iDealTile(self.mySeat, tiles[13], {})  # operation TODO
 
-
-    def discardTile(self, seat: int, tile: str, operation):
+    def discardTile(self, seat: int, tile: str, moqie: bool, operation):
         """
         seat:打牌的玩家
         tile:打出的手牌
+        moqie:是否是摸切
         operation:可选动作(吃碰杠)
         """
-
-        #discardTile (seat = 2, tile = '3m', operation = {'seat': 3, 'operationList': [{'type': 2, 'combination': ['4m|5m']}, {'type': 3, 'combination': ['3m|3m']}], 'timeFixed': 60000})
-        #终盘unknown {'id': 740, 'type': <MsgType.Notify: 1>, 'method': '.lq.ActionPrototype', 'data': {'step': 147, 'name': 'ActionNoTile', 'data': {'players': [{}, {}, {}, {'tingpai': True, 'hand': ['4m', '5m', '4s', '4s'], 'tings': [{'tile': '3m', 'haveyi': True, 'count': 1, 'fu': 30, 'biaoDoraCount': 5, 'countZimo': 1, 'fuZimo': 40}, {'tile': '6m', 'haveyi': True, 'count': 1, 'fu': 30, 'biaoDoraCount': 4, 'countZimo': 1, 'fuZimo': 40}]}], 'scores': [{'oldScores': [25000, 25000, 25000, 25000], 'deltaScores': [-1000, -1000, -1000, 3000]}]}}}
-        #我胡了unknown {'id': 1458, 'type': <MsgType.Notify: 1>, 'method': '.lq.ActionPrototype', 'data': {'step': 96, 'name': 'ActionHule', 'data': {'hules': [{'hand': ['0m', '5m', '5m', '8m', '9m', '4p', '5p', '6p', '6s', '6s'], 'ming': ['kezi(7z,7z,7z)'], 'huTile': '7m', 'seat': 3, 'doras': ['9p'], 'count': 2, 'fans': [{'val': 1, 'id': 9}, {'val': 1, 'id': 32}], 'fu': 30, 'pointRong': 2000, 'pointZimoQin': 1000, 'pointZimoXian': 500, 'pointSum': 2000}], 'oldScores': [24000, 24000, 24000, 28000], 'deltaScores': [0, 0, -2300, 2300], 'scores': [24000, 24000, 21700, 30300]}}}
-        assert(0 <= seat < 4)
-        assert(tile in all_tiles)
-        assert(type(operation) == dict or operation == None)
+        op = 'DEFG'[(seat-self.mySeat) % 4]
+        if op == 'D' and self.lastOp['opcode'] == 'D':
+            tile136 = int(self.lastOp['p'])
+        else:
+            tile136, _ = self.cardRecorder.majsoul2tenhou(tile)
+        if moqie and op!='D':
+            op=op.lower()
+        self.send(('<'+op+str(tile136)+'/>\x00').encode())
+        #operation TODO
 
     def dealTile(self, seat: int, leftTileCount: int):
         """
         seat:摸牌的玩家
         leftTileCount:剩余牌数
         """
-        assert(0 <= seat < 4)
+        op = 'UVW'[(seat-self.mySeat-1) % 4]
+        self.send(('<'+op+'/>\x00').encode())
 
     def iDealTile(self, seat: int, tile: str, leftTileCount: int, operation: Dict):
         """
@@ -216,9 +232,9 @@ class AIWrapper(sdk.MajsoulHandler):
         leftTileCount:剩余牌数
         operation:可选操作列表(TODO)
         """
-        #iDealTile (seat = 3, tile = '3m', leftTileCount = 25, operation = {'seat': 3, 'operationList': [{'type': 1}, {'type': 6, 'combination': ['3m|3m|3m|3m']}], 'timeFixed': 60000}) 自摸加杠3m
-        assert(seat == self.mySeat)
-        assert(tile in all_tiles)
+        tile136, _ = self.cardRecorder.majsoul2tenhou(tile)
+        self.send(('<T'+str(tile136)+'/>\x00').encode())
+        #operation TODO
 
     def chiPengGang(self, seat: int, tiles: List[str], froms: List[int], tileStates: List[int]):
         """
@@ -233,7 +249,19 @@ class AIWrapper(sdk.MajsoulHandler):
         assert(0 <= seat < 4)
         assert(all(tile in all_tiles for tile in tiles))
         assert(all(0 <= i < 4 for i in froms))
-            
+
+    #-------------------------Majsoul动作函数-------------------------
+
+    def on_DiscardTile(self, msg_dict):
+        """
+        tile:要打的手牌
+        """
+        self.lastOp = msg_dict
+        assert(msg_dict['opcode'] == 'D')
+        tile = self.cardRecorder.tenhou2majsoul(tile136=int(msg_dict['p']))
+        self.actionDiscardTile(tile)
+
+
 def MainLoop():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_address = ('localhost', 7479)
@@ -243,14 +271,15 @@ def MainLoop():
     server.listen(1)
     print('\nwaiting for the AI')
     connection, client_address = server.accept()
-    print('AI connection: ',type(connection),connection,client_address)
+    print('AI connection: ', type(connection), connection, client_address)
     aiWrapper = AIWrapper(connection)
 
-    inputs=[connection]
-    outputs=[]
+    inputs = [connection]
+    outputs = []
 
     while True:
-        readable, writable, exceptional = select.select(inputs, outputs, inputs, 0.5)
+        readable, writable, exceptional = select.select(
+            inputs, outputs, inputs, 0.1)
         for s in readable:
             data = s.recv(1024)
             if data:
@@ -267,5 +296,5 @@ def MainLoop():
         aiWrapper.recv_from_majsoul()
 
 
-if __name__=='__main__':
+if __name__ == '__main__':
     MainLoop()
