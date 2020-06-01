@@ -43,6 +43,7 @@ class CardRecorder:
         # (tile136,tile34) to tileStr
         if tile136 != None:
             assert(tile34 == None)
+            tile136=int(tile136)
             if tile34 in (16, 52, 88):
                 #红宝牌
                 return '0'+'mps'[(16, 52, 88).index(tile34)]
@@ -50,6 +51,7 @@ class CardRecorder:
                 return str((tile136//4) % 9+1)+'mpsz'[tile136//36]
         else:
             assert(tile136 == None)
+            tile34=int(tile34)
             if tile34 > 34:
                 #红宝牌
                 return '0'+'mps'[tile34-35]
@@ -66,7 +68,7 @@ class AIWrapper(sdk.MajsoulHandler):
         self.AI_buffer = bytes(0)
         self.AI_state = State.WaitingForStart
         # 与Majsoul的通信
-        self.majsoul_server = ServerProxy("http://localhost:8888")  # 初始化服务器
+        self.majsoul_server = ServerProxy("http://127.0.0.1:8888")  # 初始化服务器
         self.liqiProto = sdk.LiqiProto()
         self.majsoul_history_msg = []  # websocket flow_msg
         self.majsoul_msg_p = 0  # 当前准备解析的消息下标
@@ -74,6 +76,7 @@ class AIWrapper(sdk.MajsoulHandler):
         self.cardRecorder = CardRecorder()
         # AI上一次input操作的msg_dict(维护tile136一致性)
         self.lastOp = self.tenhouEncode({'opcode': None})
+        self.lastDiscard = None  # 牌桌最后一次出牌tile136，用于吃碰杠牌号
 
     def recv_from_majsoul(self):
         # 从majsoul websocket中获取数据，并尝试解析执行。
@@ -103,6 +106,8 @@ class AIWrapper(sdk.MajsoulHandler):
 
     def send(self, data: bytes):
         #向AI发送tenhou proto数据
+        if type(data) == str:
+            data = data.encode()
         print('send:', data)
         self.AI_socket.send(data)
 
@@ -120,6 +125,12 @@ class AIWrapper(sdk.MajsoulHandler):
             if op == 'D':
                 #出牌
                 self.on_DiscardTile(d)
+            elif op == 'N':
+                #回应吃碰杠
+                self.on_ChiPengGang(d)
+            elif op == 'REACH':
+                #宣告自己立直
+                self.on_Liqi(d)
 
     def tenhouDecode(self, msg: str) -> Dict:  # get tenhou protocol msg
         l = []
@@ -198,7 +209,7 @@ class AIWrapper(sdk.MajsoulHandler):
         self.send(('<INIT seed="'+','.join(str(i) for i in seed)+'" ten="'+','.join(str(i)
                                                                                     for i in ten)+'" oya="'+str(oya)+'" hai="'+','.join(str(i) for i in hai)+'"/>\x00').encode())
         if len(tiles) == 14:
-            self.iDealTile(self.mySeat, tiles[13], {})  # operation TODO
+            self.iDealTile(self.mySeat, tiles[13], leftTileCount, {})  # operation TODO
 
     def discardTile(self, seat: int, tile: str, moqie: bool, operation):
         """
@@ -212,9 +223,10 @@ class AIWrapper(sdk.MajsoulHandler):
             tile136 = int(self.lastOp['p'])
         else:
             tile136, _ = self.cardRecorder.majsoul2tenhou(tile)
-        if moqie and op!='D':
-            op=op.lower()
+        if moqie and op != 'D':
+            op = op.lower()
         self.send(('<'+op+str(tile136)+'/>\x00').encode())
+        self.lastDiscard = tile136
         #operation TODO
 
     def dealTile(self, seat: int, leftTileCount: int):
@@ -236,35 +248,92 @@ class AIWrapper(sdk.MajsoulHandler):
         self.send(('<T'+str(tile136)+'/>\x00').encode())
         #operation TODO
 
-    def chiPengGang(self, seat: int, tiles: List[str], froms: List[int], tileStates: List[int]):
+    def chiPengGang(self, type_: int, seat: int, tiles: List[str], froms: List[int], tileStates: List[int]):
         """
+        type_:操作类型
         seat:吃碰杠的玩家
         tiles:吃碰杠牌组
         froms:每张牌来自哪个玩家
         tileStates:未知(TODO)
         """
-        #{'step': 39, 'name': 'ActionChiPengGang', 'data': {'seat': 3, 'type': 1, 'tiles': ['3m', '3m', '3m'], 'froms': [3, 3, 2], 'operation': {'seat': 3, 'operationList': [{'type': 1, 'combination': ['3m']}], 'timeFixed': 60000}, 'tileStates': [0, 0]}}
-        #'data': {'step': 79, 'name': 'ActionChiPengGang', 'data': {'seat': 3, 'tiles': ['3p', '4p', '2p'], 'froms': [3, 3, 2], 'operation': {'seat': 3, 'operationList': [{'type': 1, 'combination': ['2p', '5p']}], 'timeFixed': 60000}, 'tingpais': [{'tile': '8p', 'infos': [{'tile': '3m', 'fu': 30, 'fuZimo': 30}, {'tile': '6m', 'fu': 30, 'fuZimo': 30}]}], 'tileStates': [0, 0]}}
-        #'data': {'step': 96, 'name': 'ActionAnGangAddGang', 'data': {'seat': 3, 'type': 2, 'tiles': '3m', 'tingpais': [{'tile': '3m', 'fu': 30, 'fuZimo': 40}, {'tile': '6m', 'fu': 30, 'fuZimo': 40}]}}}
+        # TODO:处理自己meld的tile136牌号问题，验证“吃”的正确性
         assert(0 <= seat < 4)
-        assert(all(tile in all_tiles for tile in tiles))
+        assert(all(tile in sdk.all_tiles for tile in tiles))
         assert(all(0 <= i < 4 for i in froms))
+        lastDiscardStr = self.cardRecorder.tenhou2majsoul(
+            tile136=self.lastDiscard)
+        assert(tiles[-1] == lastDiscardStr)
+        tenhou_seat = (seat-self.mySeat) % 4
+        from_whom = (froms[-1]-seat) % 4
+        if type_ in (0, 1):
+            assert(len(tiles) == 3)
+            tile1 = self.lastDiscard
+            tile2 = self.cardRecorder.majsoul2tenhou(tiles[1])[0]
+            tile3 = self.cardRecorder.majsoul2tenhou(tiles[0])[0]
+            tile136s = sorted([tile1, tile2, tile3])
+            t1, t2, t3 = (i % 4 for i in tile136s)
+            if type_ == 0:
+                # 吃
+                assert(tiles[0] != tiles[1] != tiles[2])
+                base = tile136s[0]//4  # 最小牌tile34
+                base = base//9*7 + base % 9
+                called = tile136s.index(tile1)  # 哪张牌是别人的
+                base_and_called = base*3 + called
+                m = (base_and_called << 10) + (t3 << 7) + \
+                    (t2 << 5) + (t1 << 3) + (1 << 2) + from_whom
+            elif type_ == 1:
+                # 碰
+                assert(tiles[0] == tiles[1] == tiles[2] or all(
+                    i[0] in ('0', '5') for i in tiles))
+                base = tile136s[0]//4  # 最小牌tile34
+                called = tile136s.index(tile1)  # 哪张牌是别人的
+                base_and_called = base*3 + called
+                t4 = ((1, 2, 3), (0, 2, 3), (0, 1, 3),
+                      (0, 1, 2)).index((t1, t2, t3))
+                m = (base_and_called << 9) + (t4 << 5) + (1 << 3) + from_whom
+        elif type_ == 2:
+            # 明杠
+            assert(len(tiles) == 4)
+            assert(tiles[0] == tiles[1] == tiles[2] == tiles[2] or all(
+                i[0] in ('0', '5') for i in tiles))
+            tile1 = self.lastDiscard
+            tile2 = self.cardRecorder.majsoul2tenhou(tiles[2])[0]
+            tile3 = self.cardRecorder.majsoul2tenhou(tiles[1])[0]
+            tile4 = self.cardRecorder.majsoul2tenhou(tiles[0])[0]
+            tile136s = sorted([tile1, tile2, tile3, tile4])
+            base = tile136s[0]//4  # 最小牌tile34
+            called = tile136s.index(tile1)  # 哪张牌是别人的
+            base_and_called = base*4 + called
+            m = (base_and_called << 8) + (1 << 6) + from_whom
+        else:
+            raise NotImplementedError
+        msg_dict = {'opcode': 'N', 'who': tenhou_seat, 'm': m}
+        self.send(self.tenhouEncode(msg_dict))
 
     #-------------------------Majsoul动作函数-------------------------
 
     def on_DiscardTile(self, msg_dict):
-        """
-        tile:要打的手牌
-        """
         self.lastOp = msg_dict
         assert(msg_dict['opcode'] == 'D')
         tile = self.cardRecorder.tenhou2majsoul(tile136=int(msg_dict['p']))
         self.actionDiscardTile(tile)
 
+    def on_ChiPengGang(self, msg_dict):
+        if 'type' not in msg_dict:
+            #无操作
+            pass  # TODO
+            return
+        raise NotImplementedError
+
+    def on_Liqi(self, msg_dict):
+        tile136 = int(msg_dict['hai'])
+        tile = self.cardRecorder.tenhou2majsoul(tile136=tile136)
+        self.actionLiqi(tile)
+
 
 def MainLoop():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_address = ('localhost', 7479)
+    server_address = ('127.0.0.1', 7479)
     print('starting up on %s port %s' % server_address)
     server.bind(server_address)
 
