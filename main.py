@@ -78,7 +78,8 @@ class AIWrapper(sdk.MajsoulHandler):
         self.cardRecorder = CardRecorder()
         # AI上一次input操作的msg_dict(维护tile136一致性)
         self.lastOp = self.tenhouEncode({'opcode': None})
-        self.lastDiscard = None  # 牌桌最后一次出牌tile136，用于吃碰杠牌号
+        self.lastDiscard = None     # 牌桌最后一次出牌tile136，用于吃碰杠牌号
+        self.hai = []             # 我当前手牌的tile136编号(和AI一致)
 
     def recv_from_majsoul(self):
         # 从majsoul websocket中获取数据，并尝试解析执行。
@@ -90,13 +91,12 @@ class AIWrapper(sdk.MajsoulHandler):
             self.majsoul_history_msg = self.majsoul_history_msg+flow
             pickle.dump(self.majsoul_history_msg, open(
                 'websocket_frames.pkl', 'wb'))
-        while(self.majsoul_msg_p < n):
+        if self.majsoul_msg_p < n:
             flow_msg = self.majsoul_history_msg[self.majsoul_msg_p]
             result = self.liqiProto.parse(flow_msg)
             failed = self.parse(result)
-            if failed:
-                break
-            self.majsoul_msg_p += 1
+            if not failed:
+                self.majsoul_msg_p += 1
 
     def recv(self, data: bytes):
         #接受来自AI的tenhou proto数据
@@ -196,21 +196,21 @@ class AIWrapper(sdk.MajsoulHandler):
         """
         if self.AI_state != State.Playing:
             return True  # AI未准备就绪，停止解析
+        self.cardRecorder.clear()
         dora136, _ = self.cardRecorder.majsoul2tenhou(doras[0])
         seed = [ju, ben, 0, -1, -1, dora136]     # 当前轮数/连庄立直信息
         self.ten = ten = [scores[(self.mySeat+i) % 4] //
                           100 for i in range(4)]  # 当前分数(1ten=100分)
         oya = (4-self.mySeat+ju) % 4      # 0~3 当前轮谁是庄家(我是0)
-        hai = []     # 当前手牌tile136
+        self.hai = []     # 当前手牌tile136
         for tile in tiles[:13]:
             tile136, _ = self.cardRecorder.majsoul2tenhou(tile)
-            hai.append(tile136)
+            self.hai.append(tile136)
         assert(len(seed) == 6)
         assert(len(ten) == 4)
         assert(0 <= oya < 4)
-        assert(len(hai) in (13, 14))
         self.send(('<INIT seed="'+','.join(str(i) for i in seed)+'" ten="'+','.join(str(i)
-                                                                                    for i in ten)+'" oya="'+str(oya)+'" hai="'+','.join(str(i) for i in hai)+'"/>\x00').encode())
+                                                                                    for i in ten)+'" oya="'+str(oya)+'" hai="'+','.join(str(i) for i in self.hai)+'"/>\x00').encode())
         if len(tiles) == 14:
             # operation TODO
             self.iDealTile(self.mySeat, tiles[13], leftTileCount, {}, {})
@@ -232,13 +232,14 @@ class AIWrapper(sdk.MajsoulHandler):
         op = 'DEFG'[(seat-self.mySeat) % 4]
         if op == 'D' and self.lastOp['opcode'] == 'D':
             tile136 = int(self.lastOp['p'])
+            self.hai.remove(tile136)
         else:
             tile136, _ = self.cardRecorder.majsoul2tenhou(tile)
         if moqie and op != 'D':
             op = op.lower()
         msg_dict = {'opcode': op+str(tile136)}
         if operation != None:
-            assert(operation['seat'] == self.mySeat)
+            assert(operation.get('seat', 0) == self.mySeat)
             opList = operation.get('operationList', [])
             canChi = any(op['type'] == Operation.Chi.value for op in opList)
             canPeng = any(op['type'] == Operation.Peng.value for op in opList)
@@ -255,6 +256,7 @@ class AIWrapper(sdk.MajsoulHandler):
                 msg_dict['t'] = 4
         self.send(self.tenhouEncode(msg_dict))
         self.lastDiscard = tile136
+        self.lastDiscardSeat = seat
         #operation TODO
 
     def dealTile(self, seat: int, leftTileCount: int, liqi: Dict):
@@ -281,7 +283,7 @@ class AIWrapper(sdk.MajsoulHandler):
         tile:摸到的牌
         leftTileCount:剩余牌数
         liqi:如果上一回合玩家出牌立直，则紧接着的摸牌阶段有此参数表示立直成功
-        operation:可选操作列表(TODO)
+        operation:可选操作列表
         """
         assert(seat == self.mySeat)
         assert(tile in sdk.all_tiles)
@@ -294,18 +296,18 @@ class AIWrapper(sdk.MajsoulHandler):
                         'ten': ','.join(str(i) for i in self.ten), 'step': 2}
             self.send(self.tenhouEncode(msg_dict))
         tile136, _ = self.cardRecorder.majsoul2tenhou(tile)
+        self.hai.append(tile136)
         msg_dict = {'opcode': 'T'+str(tile136)}
         if operation != None:
-            assert(operation['seat'] == self.mySeat)
             opList = operation.get('operationList', [])
-            canLiqi = any(op['type'] == Operation.Liqi for op in opList)
-            canZimo = any(op['type'] == Operation.Zimo for op in opList)
-            if canZimo:
+            canLiqi = any(op['type'] == Operation.Liqi.value for op in opList)
+            canZimo = any(op['type'] == Operation.Zimo.value for op in opList)
+            canHu = any(op['type'] == Operation.Hu.value for op in opList)
+            if canZimo or canHu:
                 msg_dict['t'] = 16  # 自摸
             elif canLiqi:
                 msg_dict['t'] = 32  # 立直
         self.send(self.tenhouEncode(msg_dict))
-        #operation TODO
 
     def chiPengGang(self, type_: int, seat: int, tiles: List[str], froms: List[int], tileStates: List[int]):
         """
@@ -315,20 +317,34 @@ class AIWrapper(sdk.MajsoulHandler):
         froms:每张牌来自哪个玩家
         tileStates:未知(TODO)
         """
-        # TODO:处理自己meld的tile136牌号问题,加杠实现，验证“吃”的正确性
+        # 加杠实现
         assert(0 <= seat < 4)
         assert(all(tile in sdk.all_tiles for tile in tiles))
         assert(all(0 <= i < 4 for i in froms))
+        assert(seat != froms[-1])
         lastDiscardStr = self.cardRecorder.tenhou2majsoul(
             tile136=self.lastDiscard)
         assert(tiles[-1] == lastDiscardStr)
         tenhou_seat = (seat-self.mySeat) % 4
         from_whom = (froms[-1]-seat) % 4
+
+        def popHai(tile):
+            #从self.hai中找到tile并pop
+            for tile136 in self.hai:
+                if self.cardRecorder.tenhou2majsoul(tile136=tile136) == tile:
+                    self.hai.remove(tile136)
+                    return tile136
+            raise Exception(tile+' not found.')
+
         if type_ in (0, 1):
             assert(len(tiles) == 3)
             tile1 = self.lastDiscard
-            tile2 = self.cardRecorder.majsoul2tenhou(tiles[1])[0]
-            tile3 = self.cardRecorder.majsoul2tenhou(tiles[0])[0]
+            if seat == self.mySeat:
+                tile2 = popHai(tiles[1])
+                tile3 = popHai(tiles[0])
+            else:
+                tile2 = self.cardRecorder.majsoul2tenhou(tiles[1])[0]
+                tile3 = self.cardRecorder.majsoul2tenhou(tiles[0])[0]
             tile136s = sorted([tile1, tile2, tile3])
             t1, t2, t3 = (i % 4 for i in tile136s)
             if type_ == 0:
@@ -356,9 +372,14 @@ class AIWrapper(sdk.MajsoulHandler):
             assert(tiles[0] == tiles[1] == tiles[2] == tiles[2] or all(
                 i[0] in ('0', '5') for i in tiles))
             tile1 = self.lastDiscard
-            tile2 = self.cardRecorder.majsoul2tenhou(tiles[2])[0]
-            tile3 = self.cardRecorder.majsoul2tenhou(tiles[1])[0]
-            tile4 = self.cardRecorder.majsoul2tenhou(tiles[0])[0]
+            if seat == self.mySeat:
+                tile2 = popHai(tiles[2])
+                tile3 = popHai(tiles[1])
+                tile4 = popHai(tiles[0])
+            else:
+                tile2 = self.cardRecorder.majsoul2tenhou(tiles[2])[0]
+                tile3 = self.cardRecorder.majsoul2tenhou(tiles[1])[0]
+                tile4 = self.cardRecorder.majsoul2tenhou(tiles[0])[0]
             tile136s = sorted([tile1, tile2, tile3, tile4])
             base = tile136s[0]//4  # 最小牌tile34
             called = tile136s.index(tile1)  # 哪张牌是别人的
@@ -368,6 +389,80 @@ class AIWrapper(sdk.MajsoulHandler):
             raise NotImplementedError
         msg_dict = {'opcode': 'N', 'who': tenhou_seat, 'm': m}
         self.send(self.tenhouEncode(msg_dict))
+
+    def hule(self, hand: List[str], huTile: str, seat: int, zimo: bool, liqi: bool, doras: List[str], liDoras: List[str], fan: int, fu: int, oldScores: List[int], deltaScores: List[int], newScores: List[int]):
+        """
+        hand:胡牌者手牌
+        huTile:点炮牌
+        seat:玩家座次
+        zimo:是否自摸
+        liqi:是否立直
+        doras:明宝牌列表
+        liDoras:里宝牌列表
+        fan:番数
+        fu:符数
+        oldScores:4人旧分
+        deltaScores::新分减旧分
+        newScores:4人新分
+        """
+        assert(all(tile in all_tiles for tile in hand))
+        assert(huTile in all_tiles)
+        assert(0 <= seat < 4)
+        assert(all(tile in all_tiles for tile in doras))
+        assert(all(tile in all_tiles for tile in liDoras))
+        def L2S(l): return ','.join(str(i) for i in l)
+        who = (seat-self.mySeat) % 4
+        fromWho = who if zimo else (self.lastDiscardSeat-self.mySeat) % 4
+        self.cardRecorder.clear()
+        machi, _ = self.cardRecorder.majsoul2tenhou(huTile)
+        ten = L2S((fu, deltaScores[seat], 0))
+        if seat == self.mySeat:
+            hai = L2S(self.hai)
+        else:
+            hai = L2S(self.cardRecorder.majsoul2tenhou(
+                tile)[0] for tile in hand)
+        doraHai = L2S(self.cardRecorder.majsoul2tenhou(
+            tile)[0] for tile in doras)
+        doraHaiUra = L2S(self.cardRecorder.majsoul2tenhou(tile)[
+                         0] for tile in liDoras)
+        sc = []
+        for i in range(4):
+            sc.append(oldScores[(self.mySeat+i) % 4]//100)
+            sc.append(deltaScores[(self.mySeat+i) % 4]//100)
+        sc = L2S(sc)
+        msg_dict = {'opcode': 'AGARI', 'who': who, 'fromWho': fromWho,
+                    'machi': machi, 'ten': ten, 'hai': hai, 'doraHai': doraHai, 'sc': sc}
+        if doraHaiUra:
+            msg_dict['doraHaiUra'] = doraHaiUra
+        self.send(self.tenhouEncode(msg_dict))
+        self.AI_state = State.WaitingForStart
+
+    def liuju(self, tingpai: List[bool], hands: List[List[str]], oldScores: List[int], deltaScores: List[int]):
+        """
+        tingpai:4个玩家是否停牌
+        hands:听牌玩家的手牌(没听为[])
+        oldScores:4人旧分
+        deltaScores::新分减旧分
+        """
+        assert(all(tile in all_tiles for hand in hands for tile in hand))
+        def L2S(l): return ','.join(str(i) for i in l)
+        sc = []
+        for i in range(4):
+            sc.append(oldScores[(self.mySeat+i) % 4]//100)
+            sc.append(deltaScores[(self.mySeat+i) % 4]//100)
+        msg_dict = {'opcode': 'RYUUKYOKU', 'sc': L2S(sc)}
+        self.cardRecorder.clear()
+        for i in range(4):
+            if tingpai[i]:
+                tenhou_seat = (i-self.mySeat) % 4
+                if i == self.mySeat:
+                    hai = self.hai
+                else:
+                    hai = [self.cardRecorder.majsoul2tenhou(
+                        tile)[0] for tile in hands[i]]
+                msg_dict['hai'+str(tenhou_seat)] = L2S(hai)
+        self.send(self.tenhouEncode(msg_dict))
+        self.AI_state = State.WaitingForStart
 
     #-------------------------Majsoul动作函数-------------------------
 
