@@ -7,6 +7,7 @@ from typing import Dict, List, Tuple
 from urllib.parse import quote, unquote
 from enum import Enum
 from xmlrpc.client import ServerProxy
+from subprocess import Popen,CREATE_NEW_CONSOLE
 
 import majsoul_wrapper as sdk
 from majsoul_wrapper import all_tiles, Operation
@@ -60,28 +61,47 @@ class CardRecorder:
                 return str(tile34 % 9+1)+'mpsz'[tile34//9]
 
 
-class AIWrapper(sdk.MajsoulHandler):
+class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
     # TenHouAI <-> AI_Wrapper <-> Majsoul Interface
 
-    def __init__(self, socket_: socket.socket):
-        # 与AI的通信
-        self.AI_socket = socket_
-        self.AI_buffer = bytes(0)
-        self.AI_state = State.WaitingForStart
+    def __init__(self):
+        super().__init__()
+        self.AI_socket = None
         # 与Majsoul的通信
         self.majsoul_server = ServerProxy(
             "http://127.0.0.1:37247")  # 初始化RPC服务器
         self.liqiProto = sdk.LiqiProto()
-        self.majsoul_history_msg = []  # websocket flow_msg
-        self.majsoul_msg_p = 0  # 当前准备解析的消息下标
         # 牌号转换
         self.cardRecorder = CardRecorder()
+
+    def init(self, socket_: socket.socket):
+        # 设置与AI的socket链接并初始化
+        self.AI_socket = socket_
+        self.AI_buffer = bytes(0)
+        self.AI_state = State.WaitingForStart
+        #  与Majsoul的通信
+        self.majsoul_history_msg = []  # websocket flow_msg
+        self.majsoul_msg_p = 0  # 当前准备解析的消息下标
+        self.liqiProto.init()
         # AI上一次input操作的msg_dict(维护tile136一致性)
         self.lastOp = self.tenhouEncode({'opcode': None})
         self.lastDiscard = None     # 牌桌最后一次出牌tile136，用于吃碰杠牌号
         self.hai = []             # 我当前手牌的tile136编号(和AI一致)
 
-    def recv_from_majsoul(self):
+    def isPlaying(self)->bool:
+        # 从majsoul websocket中获取数据，并判断数据流是否为对局中
+        n = self.majsoul_server.get_len()
+        liqiProto = sdk.LiqiProto()
+        if n==0:
+            return False
+        flow = pickle.loads(self.majsoul_server.get_items(0, min(100,n)).data)
+        for flow_msg in flow:
+            result = liqiProto.parse(flow_msg)
+            if result.get('method','') == '.lq.FastTest.authGame':
+                return True
+        return False
+
+    def recvFromMajsoul(self):
         # 从majsoul websocket中获取数据，并尝试解析执行。
         # 如果未达到要求无法执行则锁定self.majsoul_msg_p直到下一次尝试。
         n = self.majsoul_server.get_len()
@@ -114,6 +134,7 @@ class AIWrapper(sdk.MajsoulHandler):
         self.AI_socket.send(data)
 
     def _eventHandler(self, msg):
+        #解析AI发来的数据
         print('recv:', msg)
         d = self.tenhouDecode(msg)
         if self.AI_state == State.WaitingForStart:
@@ -505,37 +526,54 @@ class AIWrapper(sdk.MajsoulHandler):
 
 
 def MainLoop():
+    # calibrate browser position
+    aiWrapper = AIWrapper()
+    print('waiting to calibrate the browser location')
+    while not aiWrapper.calibrateMenu():
+        print('  majsoul menu not found, calibrate again')
+        time.sleep(3)
+    # create AI 
+    print('create AI subprocess')
+    AI = Popen('python gui_main.py --fake', cwd='JianYangAI', creationflags=CREATE_NEW_CONSOLE)
+    # create server
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_address = ('127.0.0.1', 7479)
     print('starting up on %s port %s' % server_address)
     server.bind(server_address)
-
     server.listen(1)
-    print('\nwaiting for the AI')
-    connection, client_address = server.accept()
-    print('AI connection: ', type(connection), connection, client_address)
-    aiWrapper = AIWrapper(connection)
-
-    inputs = [connection]
-    outputs = []
 
     while True:
-        readable, writable, exceptional = select.select(
-            inputs, outputs, inputs, 0.1)
-        for s in readable:
-            data = s.recv(1024)
-            if data:
-                # A readable client socket has data
-                aiWrapper.recv(data)
-            else:
-                # Interpret empty result as closed connection
-                print('closing', client_address, 'after reading no data')
-                return
-        # Handle "exceptional conditions"
-        for s in exceptional:
-            print('handling exceptional condition for', s.getpeername())
-            return
-        aiWrapper.recv_from_majsoul()
+        print('waiting for the AI')
+        connection, client_address = server.accept()
+        print('AI connection: ', type(connection), connection, client_address)
+        aiWrapper.init(connection)
+
+        inputs = [connection]
+        outputs = []
+
+        print('waiting for the game to start')
+        while not aiWrapper.isPlaying():
+            time.sleep(3)
+
+        while True:
+            readable, writable, exceptional = select.select(
+                inputs, outputs, inputs, 0.1)
+            for s in readable:
+                data = s.recv(1024)
+                if data:
+                    # A readable client socket has data
+                    aiWrapper.recv(data)
+                else:
+                    # Interpret empty result as closed connection
+                    print('closing', client_address, 'after reading no data')
+                    return
+            # Handle "exceptional conditions"
+            for s in exceptional:
+                print('handling exceptional condition for', s.getpeername())
+                connection.close()
+                AI.kill()
+                break
+            aiWrapper.recvFromMajsoul()
 
 
 if __name__ == '__main__':
