@@ -3,6 +3,7 @@ import time
 import select
 import socket
 import pickle
+import importlib
 from typing import Dict, List, Tuple
 from urllib.parse import quote, unquote
 from enum import Enum
@@ -88,6 +89,7 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         self.lastDiscard = None  # 牌桌最后一次出牌tile136，用于吃碰杠牌号
         self.hai = []           # 我当前手牌的tile136编号(和AI一致)
         self.isLiqi = False     # 当前是否处于立直状态
+        self.wait_a_moment = False
 
     def isPlaying(self) -> bool:
         # 从majsoul websocket中获取数据，并判断数据流是否为对局中
@@ -225,6 +227,8 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         self.ten = ten = [scores[(self.mySeat+i) % 4] //
                           100 for i in range(4)]  # 当前分数(1ten=100分)
         oya = (4-self.mySeat+ju) % 4      # 0~3 当前轮谁是庄家(我是0)
+        if oya == 0:
+            self.wait_a_moment = True  # 庄家第一轮多等一会儿
         self.hai = []     # 当前手牌tile136
         for tile in tiles[:13]:
             tile136, _ = self.cardRecorder.majsoul2tenhou(tile)
@@ -492,6 +496,9 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
     def on_DiscardTile(self, msg_dict):
         if self.isLiqi:
             return
+        if self.wait_a_moment:
+            self.wait_a_moment = False
+            time.sleep(2)
         time.sleep(0.5)
         self.lastOp = msg_dict
         assert(msg_dict['opcode'] == 'D')
@@ -533,30 +540,41 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         self.actionLiqi(tile)
 
 
-def MainLoop():
+def MainLoop(isRemoteMode=False, remoteIP: str = None):
     # calibrate browser position
     aiWrapper = AIWrapper()
     print('waiting to calibrate the browser location')
     while not aiWrapper.calibrateMenu():
         print('  majsoul menu not found, calibrate again')
         time.sleep(3)
-    # create AI
-    print('create AI subprocess')
-    AI = Popen('python gui_main.py --fake', cwd='JianYangAI',
-               creationflags=CREATE_NEW_CONSOLE)
-    # create server
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_address = ('127.0.0.1', 7479)
-    print('starting up on %s port %s' % server_address)
-    server.bind(server_address)
-    server.listen(1)
 
     while True:
-        print('waiting for the AI')
-        connection, client_address = server.accept()
-        print('AI connection: ', type(connection), connection, client_address)
-        aiWrapper.init(connection)
+        # create AI
+        if isRemoteMode == False:
+            print('create AI subprocess locally')
+            AI = Popen('python gui_main.py --fake', cwd='JianYangAI',
+                       creationflags=CREATE_NEW_CONSOLE)
+            # create server
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_address = ('127.0.0.1', 7479)
+            print('starting up on %s port %s' % server_address)
+            server.bind(server_address)
+            server.listen(1)
+            print('waiting for the AI')
+            connection, client_address = server.accept()
+            print('AI connection: ', type(connection),
+                  connection, client_address)
 
+        else:
+            print('call remote AI')
+            connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            port = importlib.import_module('remote').REMOTE_PORT
+            connection.connect((remoteIP, port))
+            ACK = connection.recv(3)
+            assert(ACK == b'ACK')
+            print('remote AI connection: ', connection, remoteIP)
+
+        aiWrapper.init(connection)
         inputs = [connection]
         outputs = []
 
