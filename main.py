@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple
 from urllib.parse import quote, unquote
 from enum import Enum
 from xmlrpc.client import ServerProxy
-from subprocess import Popen,CREATE_NEW_CONSOLE
+from subprocess import Popen, CREATE_NEW_CONSOLE
 
 import majsoul_wrapper as sdk
 from majsoul_wrapper import all_tiles, Operation
@@ -85,19 +85,20 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         self.liqiProto.init()
         # AI上一次input操作的msg_dict(维护tile136一致性)
         self.lastOp = self.tenhouEncode({'opcode': None})
-        self.lastDiscard = None     # 牌桌最后一次出牌tile136，用于吃碰杠牌号
-        self.hai = []             # 我当前手牌的tile136编号(和AI一致)
+        self.lastDiscard = None  # 牌桌最后一次出牌tile136，用于吃碰杠牌号
+        self.hai = []           # 我当前手牌的tile136编号(和AI一致)
+        self.isLiqi = False     # 当前是否处于立直状态
 
-    def isPlaying(self)->bool:
+    def isPlaying(self) -> bool:
         # 从majsoul websocket中获取数据，并判断数据流是否为对局中
         n = self.majsoul_server.get_len()
         liqiProto = sdk.LiqiProto()
-        if n==0:
+        if n == 0:
             return False
-        flow = pickle.loads(self.majsoul_server.get_items(0, min(100,n)).data)
+        flow = pickle.loads(self.majsoul_server.get_items(0, min(100, n)).data)
         for flow_msg in flow:
             result = liqiProto.parse(flow_msg)
-            if result.get('method','') == '.lq.FastTest.authGame':
+            if result.get('method', '') == '.lq.FastTest.authGame':
                 return True
         return False
 
@@ -217,6 +218,7 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         """
         if self.AI_state != State.Playing:
             return True  # AI未准备就绪，停止解析
+        self.isLiqi = False
         self.cardRecorder.clear()
         dora136, _ = self.cardRecorder.majsoul2tenhou(doras[0])
         seed = [ju, ben, 0, -1, -1, dora136]     # 当前轮数/连庄立直信息
@@ -488,6 +490,9 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
     #-------------------------Majsoul动作函数-------------------------
 
     def on_DiscardTile(self, msg_dict):
+        if self.isLiqi:
+            return
+        time.sleep(0.5)
         self.lastOp = msg_dict
         assert(msg_dict['opcode'] == 'D')
         tile = self.cardRecorder.tenhou2majsoul(tile136=int(msg_dict['p']))
@@ -495,6 +500,7 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
 
     def on_ChiPengGang(self, msg_dict):
         # <N ...\>
+        time.sleep(1)
         if 'type' not in msg_dict:
             #无操作
             self.actionChiPengGang(sdk.Operation.NoEffect, [])
@@ -515,11 +521,13 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
             self.actionHu()
         elif type_ == 7:
             #自摸胡
-            self.actionHu()
+            self.actionZimo()
         else:
             raise NotImplementedError
 
     def on_Liqi(self, msg_dict):
+        time.sleep(1)
+        self.isLiqi = True
         tile136 = int(msg_dict['hai'])
         tile = self.cardRecorder.tenhou2majsoul(tile136=tile136)
         self.actionLiqi(tile)
@@ -532,9 +540,10 @@ def MainLoop():
     while not aiWrapper.calibrateMenu():
         print('  majsoul menu not found, calibrate again')
         time.sleep(3)
-    # create AI 
+    # create AI
     print('create AI subprocess')
-    AI = Popen('python gui_main.py --fake', cwd='JianYangAI', creationflags=CREATE_NEW_CONSOLE)
+    AI = Popen('python gui_main.py --fake', cwd='JianYangAI',
+               creationflags=CREATE_NEW_CONSOLE)
     # create server
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_address = ('127.0.0.1', 7479)
