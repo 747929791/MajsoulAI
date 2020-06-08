@@ -70,7 +70,7 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         self.AI_socket = None
         # 与Majsoul的通信
         self.majsoul_server = ServerProxy(
-            "http://127.0.0.1:37247")  # 初始化RPC服务器
+            "http://127.0.0.1:37247")   # 初始化RPC服务器
         self.liqiProto = sdk.LiqiProto()
         # 牌号转换
         self.cardRecorder = CardRecorder()
@@ -81,15 +81,18 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         self.AI_buffer = bytes(0)
         self.AI_state = State.WaitingForStart
         #  与Majsoul的通信
-        self.majsoul_history_msg = []  # websocket flow_msg
+        self.majsoul_history_msg = []   # websocket flow_msg
         self.majsoul_msg_p = 0  # 当前准备解析的消息下标
         self.liqiProto.init()
         # AI上一次input操作的msg_dict(维护tile136一致性)
         self.lastOp = self.tenhouEncode({'opcode': None})
-        self.lastDiscard = None  # 牌桌最后一次出牌tile136，用于吃碰杠牌号
-        self.hai = []           # 我当前手牌的tile136编号(和AI一致)
-        self.isLiqi = False     # 当前是否处于立直状态
-        self.wait_a_moment = False
+        self.lastDiscard = None         # 牌桌最后一次出牌tile136，用于吃碰杠牌号
+        self.hai = []                   # 我当前手牌的tile136编号(和AI一致)
+        self.doras = []                 # 场面上的明宝牌
+        self.isLiqi = False             # 当前是否处于立直状态
+        self.wait_a_moment = False      # 下次操作是否需要额外等待
+        self.lastSendTime = time.time()  # 防止操作过快
+        self.pengInfo = dict()         # 记录当前碰的信息，以维护加杠时的一致性
 
     def isPlaying(self) -> bool:
         # 从majsoul websocket中获取数据，并判断数据流是否为对局中
@@ -135,6 +138,7 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
             data = data.encode()
         print('send:', data)
         self.AI_socket.send(data)
+        self.lastSendTime = time.time()
 
     def _eventHandler(self, msg):
         #解析AI发来的数据
@@ -222,6 +226,8 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
             return True  # AI未准备就绪，停止解析
         self.isLiqi = False
         self.cardRecorder.clear()
+        self.pengInfo.clear()
+        self.doras = doras
         dora136, _ = self.cardRecorder.majsoul2tenhou(doras[0])
         seed = [ju, ben, 0, -1, -1, dora136]     # 当前轮数/连庄立直信息
         self.ten = ten = [scores[(self.mySeat+i) % 4] //
@@ -242,16 +248,26 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
             # operation TODO
             self.iDealTile(self.mySeat, tiles[13], leftTileCount, {}, {})
 
-    def discardTile(self, seat: int, tile: str, moqie: bool, isLiqi: bool, operation):
+    def discardTile(self, seat: int, tile: str, moqie: bool, isLiqi: bool, doras: List[str], operation):
         """
         seat:打牌的玩家
         tile:打出的手牌
         moqie:是否是摸切
         isLiqi:当回合是否出牌后立直
+        doras:上一家杠牌后记录所有明宝牌(其余时刻为[])
         operation:可选动作(吃碰杠)
         """
         assert(0 <= seat < 4)
         assert(tile in sdk.all_tiles)
+        if len(doras) > len(self.doras):
+            # 新增明宝牌
+            for tile in self.doras:
+                doras.remove(tile)
+            assert(len(doras) == 1)
+            new_dora = doras[0]
+            self.doras.append(new_dora)
+            tile136 = self.cardRecorder.majsoul2tenhou(new_dora)
+            self.send(self.tenhouEncode({'opcode': 'DORA', 'hai': tile136}))
         if isLiqi:
             msg_dict = {'opcode': 'REACH', 'who': (
                 seat-self.mySeat) % 4, 'step': 1}
@@ -327,6 +343,8 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         msg_dict = {'opcode': 'T'+str(tile136)}
         if operation != None:
             opList = operation.get('operationList', [])
+            canJiaGang = any(
+                op['type'] == Operation.JiaGang.value for op in opList)
             canLiqi = any(op['type'] == Operation.Liqi.value for op in opList)
             canZimo = any(op['type'] == Operation.Zimo.value for op in opList)
             canHu = any(op['type'] == Operation.Hu.value for op in opList)
@@ -344,7 +362,6 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         froms:每张牌来自哪个玩家
         tileStates:未知(TODO)
         """
-        # 加杠实现
         assert(0 <= seat < 4)
         assert(all(tile in sdk.all_tiles for tile in tiles))
         assert(all(0 <= i < 4 for i in froms))
@@ -393,6 +410,7 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
                 t4 = ((1, 2, 3), (0, 2, 3), (0, 1, 3),
                       (0, 1, 2)).index((t1, t2, t3))
                 m = (base_and_called << 9) + (t4 << 5) + (1 << 3) + from_whom
+                self.pengInfo[base] = m
         elif type_ == 2:
             # 明杠
             assert(len(tiles) == 4)
@@ -413,6 +431,32 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
             base_and_called = base*4 + called
             m = (base_and_called << 8) + (1 << 6) + from_whom
         else:
+            raise NotImplementedError
+        msg_dict = {'opcode': 'N', 'who': tenhou_seat, 'm': m}
+        self.send(self.tenhouEncode(msg_dict))
+
+    def anGangAddGang(self, type_: int, seat: int, tiles: str):
+        """
+        type_:操作类型
+        seat:杠的玩家
+        tiles:杠的牌
+        """
+        tenhou_seat = (seat-self.mySeat) % 4
+        if type_ == 2:
+            #自己加杠
+            assert(tiles in all_tiles)
+            if seat == self.mySeat:
+                tile = popHai(tiles)
+            else:
+                tile = self.cardRecorder.majsoul2tenhou(tiles)[0]
+            t4 = tile % 4
+            base = tile//4  # 最小牌tile34
+            assert(base in self.pengInfo)
+            base_and_called = self.pengInfo[base] >> 9
+            from_whom = self.pengInfo[base] & 3
+            m = (base_and_called << 9) + (t4 << 5) + (1 << 4) + from_whom
+        else:
+            # 暗杠Tenhou见replay3/7
             raise NotImplementedError
         msg_dict = {'opcode': 'N', 'who': tenhou_seat, 'm': m}
         self.send(self.tenhouEncode(msg_dict))
@@ -493,21 +537,26 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
 
     #-------------------------Majsoul动作函数-------------------------
 
+    def wait_for_a_while(self, delay=2.0):
+        # 如果读秒不足delay则强行等待一会儿
+        dt = time.time()-self.lastSendTime
+        if dt < delay:
+            time.sleep(delay-dt)
+
     def on_DiscardTile(self, msg_dict):
-        if self.isLiqi:
-            return
         if self.wait_a_moment:
             self.wait_a_moment = False
-            time.sleep(2)
-        time.sleep(0.5)
+            time.sleep(4)
+        self.wait_for_a_while()
         self.lastOp = msg_dict
         assert(msg_dict['opcode'] == 'D')
         tile = self.cardRecorder.tenhou2majsoul(tile136=int(msg_dict['p']))
-        self.actionDiscardTile(tile)
+        if not self.isLiqi:
+            self.actionDiscardTile(tile)
 
     def on_ChiPengGang(self, msg_dict):
         # <N ...\>
-        time.sleep(1)
+        self.wait_for_a_while()
         if 'type' not in msg_dict:
             #无操作
             self.actionChiPengGang(sdk.Operation.NoEffect, [])
@@ -518,11 +567,20 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
             tile1 = self.cardRecorder.tenhou2majsoul(tile136=msg_dict['hai0'])
             tile2 = self.cardRecorder.tenhou2majsoul(tile136=msg_dict['hai1'])
             self.actionChiPengGang(sdk.Operation.Peng, [tile1, tile2])
+        elif type_ == 2:
+            #明杠
+            self.actionChiPengGang(sdk.Operation.MingGang, [])
         elif type_ == 3:
             #吃
             tile1 = self.cardRecorder.tenhou2majsoul(tile136=msg_dict['hai0'])
             tile2 = self.cardRecorder.tenhou2majsoul(tile136=msg_dict['hai1'])
             self.actionChiPengGang(sdk.Operation.Chi, [tile1, tile2])
+        elif type_ == 4:
+            #暗杠
+            self.actionChiPengGang(sdk.Operation.MingGang, [])
+        elif type_ == 5:
+            #加杠
+            self.actionChiPengGang(sdk.Operation.JiaGang, [])
         elif type_ == 6:
             #点炮胡
             self.actionHu()
@@ -533,7 +591,7 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
             raise NotImplementedError
 
     def on_Liqi(self, msg_dict):
-        time.sleep(1)
+        self.wait_for_a_while()
         self.isLiqi = True
         tile136 = int(msg_dict['hai'])
         tile = self.cardRecorder.tenhou2majsoul(tile136=tile136)
@@ -592,7 +650,7 @@ def MainLoop(isRemoteMode=False, remoteIP: str = None):
                     aiWrapper.recv(data)
                 else:
                     # Interpret empty result as closed connection
-                    print('closing', client_address, 'after reading no data')
+                    print('closing server after reading no data')
                     return
             # Handle "exceptional conditions"
             for s in exceptional:
@@ -604,4 +662,5 @@ def MainLoop(isRemoteMode=False, remoteIP: str = None):
 
 
 if __name__ == '__main__':
-    MainLoop()
+    #MainLoop()
+    MainLoop(isRemoteMode=True, remoteIP='166.111.139.116')
