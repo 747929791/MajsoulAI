@@ -92,7 +92,8 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         self.isLiqi = False             # 当前是否处于立直状态
         self.wait_a_moment = False      # 下次操作是否需要额外等待
         self.lastSendTime = time.time()  # 防止操作过快
-        self.pengInfo = dict()         # 记录当前碰的信息，以维护加杠时的一致性
+        self.pengInfo = dict()          # 记录当前碰的信息，以维护加杠时的一致性
+        self.lastOperation = None       # 用于判断吃碰是否需要二次选择
 
     def isPlaying(self) -> bool:
         # 从majsoul websocket中获取数据，并判断数据流是否为对局中
@@ -266,7 +267,7 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
             assert(len(doras) == 1)
             new_dora = doras[0]
             self.doras.append(new_dora)
-            tile136 = self.cardRecorder.majsoul2tenhou(new_dora)
+            tile136, _ = self.cardRecorder.majsoul2tenhou(new_dora)
             self.send(self.tenhouEncode({'opcode': 'DORA', 'hai': tile136}))
         if isLiqi:
             msg_dict = {'opcode': 'REACH', 'who': (
@@ -300,6 +301,7 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         self.send(self.tenhouEncode(msg_dict))
         self.lastDiscard = tile136
         self.lastDiscardSeat = seat
+        self.lastOperation = operation
         #operation TODO
 
     def dealTile(self, seat: int, leftTileCount: int, liqi: Dict):
@@ -442,6 +444,13 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         tiles:杠的牌
         """
         tenhou_seat = (seat-self.mySeat) % 4
+        def popHai(tile):
+            #从self.hai中找到tile并pop
+            for tile136 in self.hai:
+                if self.cardRecorder.tenhou2majsoul(tile136=tile136) == tile:
+                    self.hai.remove(tile136)
+                    return tile136
+            raise Exception(tile+' not found.')
         if type_ == 2:
             #自己加杠
             assert(tiles in all_tiles)
@@ -455,8 +464,21 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
             base_and_called = self.pengInfo[base] >> 9
             from_whom = self.pengInfo[base] & 3
             m = (base_and_called << 9) + (t4 << 5) + (1 << 4) + from_whom
-        else:
+        elif type_ == 3:
+            # 他家暗杠
             # 暗杠Tenhou见replay3/7
+            if seat == self.mySeat:
+                tile = popHai(tiles)
+                tile = popHai(tiles)
+                tile = popHai(tiles)
+                tile = popHai(tiles)
+            else:
+                tile = self.cardRecorder.majsoul2tenhou(tiles)[0]
+                tile = self.cardRecorder.majsoul2tenhou(tiles)[0]
+                tile = self.cardRecorder.majsoul2tenhou(tiles)[0]
+                tile = self.cardRecorder.majsoul2tenhou(tiles)[0]
+            m = (tile//4) << 10
+        else:
             raise NotImplementedError
         msg_dict = {'opcode': 'N', 'who': tenhou_seat, 'm': m}
         self.send(self.tenhouEncode(msg_dict))
@@ -552,6 +574,7 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         assert(msg_dict['opcode'] == 'D')
         tile = self.cardRecorder.tenhou2majsoul(tile136=int(msg_dict['p']))
         if not self.isLiqi:
+            self.forceTiaoGuo()
             self.actionDiscardTile(tile)
 
     def on_ChiPengGang(self, msg_dict):
@@ -575,6 +598,29 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
             tile1 = self.cardRecorder.tenhou2majsoul(tile136=msg_dict['hai0'])
             tile2 = self.cardRecorder.tenhou2majsoul(tile136=msg_dict['hai1'])
             self.actionChiPengGang(sdk.Operation.Chi, [tile1, tile2])
+            #判断是否有多个候选方案需二次选择
+            if self.lastOperation != None:
+                opList = self.lastOperation.get('operationList', [])
+                opList = [op for op in opList if op['type']
+                          == Operation.Chi.value]
+                assert(len(opList) == 1)
+                op = opList[0]
+                combination = op['combination']
+                # e.g. combination = ['4s|0s', '4s|5s']
+                if len(combination) > 1:
+                    # 需要二次选择
+                    combination = [tuple(sorted(c.split('|')))
+                                   for c in combination]
+                    AI_combination = tuple(sorted([tile1, tile2]))
+                    assert(AI_combination in combination)
+                    # 如果有包含红包牌的同构吃但AI犯蠢没选，强制改为吃红包牌
+                    oc = tuple(sorted([i.replace('5', '0')
+                                       for i in AI_combination]))
+                    if oc in combination:
+                        AI_combination = oc
+                    print('clickCandidateMeld AI_combination', AI_combination)
+                    time.sleep(1)
+                    self.clickCandidateMeld(AI_combination)
         elif type_ == 4:
             #暗杠
             self.actionChiPengGang(sdk.Operation.MingGang, [])
@@ -662,5 +708,4 @@ def MainLoop(isRemoteMode=False, remoteIP: str = None):
 
 
 if __name__ == '__main__':
-    #MainLoop()
-    MainLoop(isRemoteMode=True, remoteIP='166.111.139.116')
+    MainLoop()
