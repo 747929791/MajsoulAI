@@ -3,6 +3,7 @@ import time
 import select
 import socket
 import pickle
+import argparse
 import importlib
 from typing import Dict, List, Tuple
 from urllib.parse import quote, unquote
@@ -468,9 +469,9 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         elif type_ == 3:
             # 他家暗杠
             # 暗杠Tenhou见replay3/7
-            tile4 = [tiles.replace('0','5') for i in range(4)]
+            tile4 = [tiles.replace('0', '5') for i in range(4)]
             if tiles[0] in '05' and tiles[1] in 'mps':
-                tile4[0]='0'+tiles[1]
+                tile4[0] = '0'+tiles[1]
             if seat == self.mySeat:
                 for i in range(4):
                     tile = popHai(tile4[i])
@@ -579,7 +580,7 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
 
     def on_ChiPengGang(self, msg_dict):
         # <N ...\>
-        self.wait_for_a_while(delay=3)
+        self.wait_for_a_while()
         if 'type' not in msg_dict:
             #无操作
             self.actionChiPengGang(sdk.Operation.NoEffect, [])
@@ -644,7 +645,7 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         self.actionLiqi(tile)
 
 
-def MainLoop(isRemoteMode=False, remoteIP: str = None, level=1):
+def MainLoop(isRemoteMode=False, remoteIP: str = None, level=None):
     # 循环进行段位场对局，level=0~4表示铜/银/金/玉/王之间
     # calibrate browser position
     aiWrapper = AIWrapper()
@@ -683,7 +684,8 @@ def MainLoop(isRemoteMode=False, remoteIP: str = None, level=1):
         inputs = [connection]
         outputs = []
 
-        aiWrapper.actionBeginGame(level)
+        if level != None:
+            aiWrapper.actionBeginGame(level)
 
         print('waiting for the game to start')
         while not aiWrapper.isPlaying():
@@ -716,4 +718,14 @@ def MainLoop(isRemoteMode=False, remoteIP: str = None, level=1):
 
 
 if __name__ == '__main__':
-    MainLoop()
+    parser = argparse.ArgumentParser(description="MajsoulAI")
+    parser.add_argument('-r', '--remote_ip', default='')
+    parser.add_argument('-l', '--level', default=None)
+    args = parser.parse_args()
+    level = None if args.level == None else int(args.level)
+    if args.remote_ip == '':
+        #本地AI模式
+        MainLoop(level=level)
+    else:
+        #远程AI模式
+        MainLoop(isRemoteMode=True, remoteIP=args.remote_ip, level=level)
