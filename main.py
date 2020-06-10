@@ -444,6 +444,7 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         tiles:杠的牌
         """
         tenhou_seat = (seat-self.mySeat) % 4
+
         def popHai(tile):
             #从self.hai中找到tile并pop
             for tile136 in self.hai:
@@ -467,16 +468,15 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         elif type_ == 3:
             # 他家暗杠
             # 暗杠Tenhou见replay3/7
+            tile4 = [tiles.replace('0','5') for i in range(4)]
+            if tiles[0] in '05' and tiles[1] in 'mps':
+                tile4[0]='0'+tiles[1]
             if seat == self.mySeat:
-                tile = popHai(tiles)
-                tile = popHai(tiles)
-                tile = popHai(tiles)
-                tile = popHai(tiles)
+                for i in range(4):
+                    tile = popHai(tile4[i])
             else:
-                tile = self.cardRecorder.majsoul2tenhou(tiles)[0]
-                tile = self.cardRecorder.majsoul2tenhou(tiles)[0]
-                tile = self.cardRecorder.majsoul2tenhou(tiles)[0]
-                tile = self.cardRecorder.majsoul2tenhou(tiles)[0]
+                for i in range(4):
+                    tile = self.cardRecorder.majsoul2tenhou(tile4[i])[0]
             m = (tile//4) << 10
         else:
             raise NotImplementedError
@@ -579,7 +579,7 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
 
     def on_ChiPengGang(self, msg_dict):
         # <N ...\>
-        self.wait_for_a_while()
+        self.wait_for_a_while(delay=3)
         if 'type' not in msg_dict:
             #无操作
             self.actionChiPengGang(sdk.Operation.NoEffect, [])
@@ -644,7 +644,8 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         self.actionLiqi(tile)
 
 
-def MainLoop(isRemoteMode=False, remoteIP: str = None):
+def MainLoop(isRemoteMode=False, remoteIP: str = None, level=1):
+    # 循环进行段位场对局，level=0~4表示铜/银/金/玉/王之间
     # calibrate browser position
     aiWrapper = AIWrapper()
     print('waiting to calibrate the browser location')
@@ -682,6 +683,8 @@ def MainLoop(isRemoteMode=False, remoteIP: str = None):
         inputs = [connection]
         outputs = []
 
+        aiWrapper.actionBeginGame(level)
+
         print('waiting for the game to start')
         while not aiWrapper.isPlaying():
             time.sleep(3)
@@ -701,10 +704,15 @@ def MainLoop(isRemoteMode=False, remoteIP: str = None):
             # Handle "exceptional conditions"
             for s in exceptional:
                 print('handling exceptional condition for', s.getpeername())
-                connection.close()
-                AI.kill()
                 break
             aiWrapper.recvFromMajsoul()
+            if aiWrapper.isEnd:
+                aiWrapper.isEnd = False
+                if isRemoteMode == False:
+                    AI.kill()
+                connection.close()
+                aiWrapper.actionReturnToMenu()
+                break
 
 
 if __name__ == '__main__':
