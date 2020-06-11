@@ -263,8 +263,8 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         assert(tile in sdk.all_tiles)
         if len(doras) > len(self.doras):
             # 新增明宝牌
-            for tile in self.doras:
-                doras.remove(tile)
+            for dora_tile in self.doras:
+                doras.remove(dora_tile)
             assert(len(doras) == 1)
             new_dora = doras[0]
             self.doras.append(new_dora)
