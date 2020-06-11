@@ -562,6 +562,12 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         self.send(self.tenhouEncode(msg_dict))
         self.AI_state = State.WaitingForStart
 
+    def newRoundButLiuju(self):
+        """
+        四风连打与九种九牌(?)引起的开局流局
+        """
+        self.send(self.tenhouEncode({'opcode': 'RYUUKYOKU'}))
+
     #-------------------------Majsoul动作函数-------------------------
 
     def wait_for_a_while(self, delay=2.0):
