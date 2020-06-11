@@ -624,7 +624,7 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
                     if oc in combination:
                         AI_combination = oc
                     print('clickCandidateMeld AI_combination', AI_combination)
-                    time.sleep(1)
+                    time.sleep(2)
                     self.clickCandidateMeld(AI_combination)
         elif type_ == 4:
             #暗杠
