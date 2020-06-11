@@ -40,6 +40,7 @@ class CardRecorder:
                 tile136 += 1
             tile136 += self.cardDict[tile]
             self.cardDict[tile] += 1
+            assert(0<=self.cardDict[tile]<=4)
             tile34 = tile136//4
             return (tile136, tile34)
 
@@ -276,8 +277,11 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
             self.send(self.tenhouEncode(msg_dict))
         op = 'DEFG'[(seat-self.mySeat) % 4]
         if op == 'D' and self.lastOp['opcode'] == 'D':
-            tile136 = int(self.lastOp['p'])
-            self.hai.remove(tile136)
+            if self.isLiqi:
+                tile136 = self.hai.pop()
+            else:
+                tile136 = int(self.lastOp['p'])
+                self.hai.remove(tile136)
         else:
             tile136, _ = self.cardRecorder.majsoul2tenhou(tile)
         if moqie and op != 'D':
