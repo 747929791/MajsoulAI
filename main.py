@@ -279,11 +279,13 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
             self.send(self.tenhouEncode(msg_dict))
         op = 'DEFG'[(seat-self.mySeat) % 4]
         if op == 'D' and self.lastOp['opcode'] == 'D':
-            if self.isLiqi:
-                tile136 = self.hai.pop()
-            else:
-                tile136 = int(self.lastOp['p'])
-                self.hai.remove(tile136)
+            tile136=None
+            for t in self.hai:
+                if self.cardRecorder.tenhou2majsoul(tile136=t)==tile:
+                    tile136=t
+                    self.hai.remove(t)
+                    break
+            assert(tile136!=None)
         else:
             tile136, _ = self.cardRecorder.majsoul2tenhou(tile)
         if moqie and op != 'D':
