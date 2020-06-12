@@ -15,7 +15,7 @@ REMOTE_HOST = '0.0.0.0'
 REMOTE_PORT = 14782
 
 
-def GameLoop(client_conn, AI_conn):
+def GameLoop(client_conn, AI, AI_conn):
     inputs = [client_conn, AI_conn]
     outputs = []
     while True:
@@ -32,16 +32,16 @@ def GameLoop(client_conn, AI_conn):
             else:
                 # Interpret empty result as closed connection
                 print('closing server after reading no data')
-                AI.kill()
                 AI_conn.close()
                 client_conn.close()
+                AI.kill()
                 return
         # Handle "exceptional conditions"
         for s in exceptional:
             print('handling exceptional condition for', s.getpeername())
-            AI.kill()
             AI_conn.close()
             client_conn.close()
+            AI.kill()
             return
 
 
@@ -69,4 +69,4 @@ if __name__ == '__main__':
         client_conn.send(b'ACK')
         print('AI is ready.')
 
-        GameLoop(client_conn, AI_conn)
+        GameLoop(client_conn, AI, AI_conn)

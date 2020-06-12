@@ -564,9 +564,9 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         self.send(self.tenhouEncode(msg_dict))
         self.AI_state = State.WaitingForStart
 
-    def newRoundButLiuju(self):
+    def specialLiuju(self):
         """
-        四风连打与九种九牌(?)引起的开局流局
+        四风连打、九种九牌、四杠散了引起的流局
         """
         self.send(self.tenhouEncode({'opcode': 'RYUUKYOKU'}))
 
@@ -722,9 +722,9 @@ def MainLoop(isRemoteMode=False, remoteIP: str = None, level=None):
             aiWrapper.recvFromMajsoul()
             if aiWrapper.isEnd:
                 aiWrapper.isEnd = False
+                connection.close()
                 if isRemoteMode == False:
                     AI.kill()
-                connection.close()
                 aiWrapper.actionReturnToMenu()
                 break
 
