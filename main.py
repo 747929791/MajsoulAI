@@ -214,23 +214,30 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         self.AI_state = State.Playing
     #-------------------------Majsoul回调函数-------------------------
 
-    def newRound(self, ju: int, ben: int, tiles: List[str], scores: List[int], leftTileCount: int, doras: List[str]):
+    def newRound(self, chang: int, ju: int, ben: int, liqibang: int, tiles: List[str], scores: List[int], leftTileCount: int, doras: List[str]):
         """
-        ju:当前第几局(0:东1局,3:东4局，连庄不变，TODO:南)
+        chang:当前的场风，0~3:东南西北
+        ju:当前第几局(0:1局,3:4局，连庄不变)
+        liqibang:流局立直棒数量(画面左上角一个红点的棒)
         ben:连装棒数量(画面左上角八个黑点的棒)
-        TODO:流局立直棒数量(画面左上角一个红点的棒)
         tiles:我的初始手牌
         scores:当前场上四个玩家的剩余分数(从东家开始顺序)
         leftTileCount:剩余牌数
         doras:宝牌列表
         """
+        assert(chang*4+ju >= 0)
+        assert(len(tiles) in (13, 14) and all(
+            tile in all_tiles for tile in tiles))
+        assert(leftTileCount == 69)
+        assert(all(dora in all_tiles for dora in doras))
+        assert(len(doras) == 1)
         if self.AI_state != State.Playing:
             return True  # AI未准备就绪，停止解析
         self.isLiqi = False
         self.cardRecorder.clear()
         self.pengInfo.clear()
         dora136, _ = self.cardRecorder.majsoul2tenhou(doras[0])
-        seed = [ju, ben, 0, -1, -1, dora136]     # 当前轮数/连庄立直信息
+        seed = [chang*4+ju, ben, liqibang, -1, -1, dora136]     # 当前轮数/连庄立直信息
         self.ten = ten = [scores[(self.mySeat+i) % 4] //
                           100 for i in range(4)]  # 当前分数(1ten=100分)
         oya = (4-self.mySeat+ju) % 4      # 0~3 当前轮谁是庄家(我是0)
