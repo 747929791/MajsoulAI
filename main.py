@@ -40,7 +40,7 @@ class CardRecorder:
                 tile136 += 1
             tile136 += self.cardDict[tile]
             self.cardDict[tile] += 1
-            assert(0<=self.cardDict[tile]<=4)
+            assert(0 <= self.cardDict[tile] <= 4)
             tile34 = tile136//4
             return (tile136, tile34)
 
@@ -90,7 +90,6 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         self.lastOp = self.tenhouEncode({'opcode': None})
         self.lastDiscard = None         # 牌桌最后一次出牌tile136，用于吃碰杠牌号
         self.hai = []                   # 我当前手牌的tile136编号(和AI一致)
-        self.doras = []                 # 场面上的明宝牌
         self.isLiqi = False             # 当前是否处于立直状态
         self.wait_a_moment = False      # 下次操作是否需要额外等待
         self.lastSendTime = time.time()  # 防止操作过快
@@ -230,7 +229,6 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
         self.isLiqi = False
         self.cardRecorder.clear()
         self.pengInfo.clear()
-        self.doras = doras
         dora136, _ = self.cardRecorder.majsoul2tenhou(doras[0])
         seed = [ju, ben, 0, -1, -1, dora136]     # 当前轮数/连庄立直信息
         self.ten = ten = [scores[(self.mySeat+i) % 4] //
@@ -251,26 +249,23 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
             # operation TODO
             self.iDealTile(self.mySeat, tiles[13], leftTileCount, {}, {})
 
-    def discardTile(self, seat: int, tile: str, moqie: bool, isLiqi: bool, doras: List[str], operation):
+    def newDora(self, dora: str):
+        """
+        处理discardTile/dealTile中通知增加明宝牌的信息
+        """
+        tile136, _ = self.cardRecorder.majsoul2tenhou(dora)
+        self.send(self.tenhouEncode({'opcode': 'DORA', 'hai': tile136}))
+
+    def discardTile(self, seat: int, tile: str, moqie: bool, isLiqi: bool, operation):
         """
         seat:打牌的玩家
         tile:打出的手牌
         moqie:是否是摸切
         isLiqi:当回合是否出牌后立直
-        doras:上一家杠牌后记录所有明宝牌(其余时刻为[])
         operation:可选动作(吃碰杠)
         """
         assert(0 <= seat < 4)
         assert(tile in sdk.all_tiles)
-        if len(doras) > len(self.doras):
-            # 新增明宝牌
-            for dora_tile in self.doras:
-                doras.remove(dora_tile)
-            assert(len(doras) == 1)
-            new_dora = doras[0]
-            self.doras.append(new_dora)
-            tile136, _ = self.cardRecorder.majsoul2tenhou(new_dora)
-            self.send(self.tenhouEncode({'opcode': 'DORA', 'hai': tile136}))
         if isLiqi:
             msg_dict = {'opcode': 'REACH', 'who': (
                 seat-self.mySeat) % 4, 'step': 1}
