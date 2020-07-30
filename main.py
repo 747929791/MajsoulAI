@@ -660,7 +660,7 @@ class AIWrapper(sdk.GUIInterface, sdk.MajsoulHandler):
 
 
 def MainLoop(isRemoteMode=False, remoteIP: str = None, level=None):
-    # 循环进行段位场对局，level=0~4表示铜/银/金/玉/王之间
+    # 循环进行段位场对局，level=0~4表示铜/银/金/玉/王之间，None需手动开始游戏
     # calibrate browser position
     aiWrapper = AIWrapper()
     print('waiting to calibrate the browser location')
