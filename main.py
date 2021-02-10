@@ -672,7 +672,7 @@ def MainLoop(isRemoteMode=False, remoteIP: str = None, level=None):
         # create AI
         if isRemoteMode == False:
             print('create AI subprocess locally')
-            AI = Popen('python gui_main.py --fake', cwd='JianYangAI',
+            AI = Popen('python main.py --fake', cwd='JianYangAI',
                        creationflags=CREATE_NEW_CONSOLE)
             # create server
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -723,10 +723,12 @@ def MainLoop(isRemoteMode=False, remoteIP: str = None, level=None):
                 break
             aiWrapper.recvFromMajsoul()
             if aiWrapper.isEnd:
+                results = [rv for r in zip(aiWrapper.finalScore, [-1]*4) for rv in r]
+                aiWrapper.send('owari="{},{},{},{},{},{},{},{}"\x00<PROF\x00'.format(*results))
                 aiWrapper.isEnd = False
                 connection.close()
                 if isRemoteMode == False:
-                    AI.kill()
+                    AI.wait()
                 aiWrapper.actionReturnToMenu()
                 break
 
