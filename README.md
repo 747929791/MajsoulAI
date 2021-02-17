@@ -3,9 +3,28 @@
 
 ## 使用说明
 
-### 准备工作
+### 运行环境
 
-我们**强烈建议**在安装与运行之前阅读[majsoul_wrapper](https://github.com/747929791/majsoul_wrapper)的使用说明，这是MajsoulAI的基础。
+运行时环境推荐使用[Python Virtual Environment](https://docs.python.org/3/tutorial/venv.html)，以Win10系统python 3.7.7版本为例，首先建立一个venv环境并激活：
+```bash
+$python -m venv ./venv
+$cmd
+$.\venv\Scripts\activate.bat
+```
+然后安装必要的依赖：
+```bash
+$python -m pip install --upgrade pip
+$pip install -r requirements.txt
+```
+一个特殊的依赖是pytorch，由于其版本与安装方式经常变化，建议参考[官网](https://pytorch.org/get-started/locally/)选择合适的版本的安装命令，例如当前最新的Windows-Pip-Cuda10.2对应的安装命令为：
+```bash
+$pip install torch===1.7.1 torchvision===0.8.2 torchaudio===0.7.2 -f https://download.pytorch.org/whl/torch_stable.html
+```
+完成上述操作后后理论上即可用该虚拟环境完成后续操作。
+
+### 启动交互代理
+
+MajsoulAI与雀魂的交互依托[majsoul_wrapper](https://github.com/747929791/majsoul_wrapper)，我们**强烈建议**在运行之前阅读majsoul_wrapper的[使用说明](https://github.com/747929791/majsoul_wrapper)，里面讲述了交互过程的细节包括如何获取局面信息与如何施加动作到浏览器。
 
 在安装完成majsoul_wrapper之后，一切都将变得水到渠成，因为这个项目并没有什么其他需要安装的了。
 
@@ -20,7 +39,7 @@ $python -m majsoul_wrapper
 ./majsoul_wrapper$ mitmdump -s addons.py
 ```
 
-此时你应该可以看到一个新启动的Chrome，在这个Chrome窗口里打开[雀魂](http://www.maj-soul.com/)并登陆至主界面（目前雀魂国际化版本只支持**繁体中文**，简体的button定位未实现）。由于MajsoulAI是基于图像识别的，所以接下来AI启动与运行时需始终保持mitmproxy存活，且校准过程中保持雀魂主界面（段位場、比賽場、友人場）始终完整的置于屏幕顶层（位置与大小不重要，不是太小即可）。
+此时你应该可以看到一个新启动的Chrome，在这个Chrome窗口里打开[雀魂](http://www.maj-soul.com/)并登陆至主界面（目前雀魂国际化版本只支持**繁体中文**，简体的button定位未实现）。由于MajsoulAI是基于图像识别的，所以接下来AI启动与运行时需始终保持mitmproxy存活，且校准过程中保持雀魂主界面（段位場、比賽場、友人場）始终完整的置于屏幕顶层（位置与大小不重要，不是太小即可），并且AI一旦确认了浏览器坐标进入运行模式后不能再变更浏览器位置（否则将会点击错误的屏幕坐标）。
 
 
 ### 启动AI
