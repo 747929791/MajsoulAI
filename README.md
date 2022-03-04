@@ -1,6 +1,8 @@
 # MajsoulAI
 **MajsoulAI**项目旨在实现在《雀魂》中用AI代替玩家打麻将。MajsoulAI前端使用[majsoul_wrapper](https://github.com/747929791/majsoul_wrapper)通过监听《雀魂》websocket对局信息作为输入，以基于图像识别的模拟鼠标点击作为输出。MajsoulAI后端桥接至一个开源的天凤麻将AI([JianYangAI](https://github.com/erreurt/MahjongAI))。
 
+**注：因近期科研工作繁忙，短期可能没有太多精力完善这个项目，欢迎大家踊跃提交pull requests，我会第一时间处理!**
+
 ## 使用说明
 
 ### 运行环境
